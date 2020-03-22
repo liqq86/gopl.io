@@ -22,11 +22,16 @@ func main() {
 	done := make(chan struct{})
 	go func() {
 		io.Copy(os.Stdout, conn) // NOTE: ignoring errors
-		log.Println("done")
-		done <- struct{}{} // signal the main goroutine
+		done <- struct{}{}       // signal the main goroutine
 	}()
 	mustCopy(conn, os.Stdin)
-	conn.Close()
+
+	//just close the tcp write end, so the read routine continue printing server response
+	tcp, ok := conn.(*net.TCPConn)
+	if !ok {
+		log.Fatal("conn not tcp connection")
+	}
+	tcp.CloseWrite()
 	<-done // wait for background goroutine to finish
 }
 
