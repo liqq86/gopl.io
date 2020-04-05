@@ -15,31 +15,49 @@ import (
 )
 
 //!+broadcaster
-type client chan<- string // an outgoing message channel
+type clientID string
+type cmsg struct {
+	cid   clientID
+	msg   string
+	mtype int
+}
+
+type client chan<- cmsg // an outgoing message channel
+type clientEntry struct {
+	cid clientID
+	ch  client
+}
 
 var (
-	entering = make(chan client)
-	leaving  = make(chan client)
-	messages = make(chan string) // all incoming client messages
+	entering = make(chan clientEntry)
+	leaving  = make(chan clientEntry)
+	messages = make(chan cmsg) // all incoming client messages
 )
 
 func broadcaster() {
-	clients := make(map[client]bool) // all connected clients
+	clients := make(map[clientID]client) // all connected clients
 	for {
 		select {
-		case msg := <-messages:
+		case m := <-messages:
 			// Broadcast incoming message to all
 			// clients' outgoing message channels.
-			for cli := range clients {
-				cli <- msg
+			if m.mtype == 2 {
+				log.Println("say " + m.msg + " " + string(m.cid))
+			}
+			for cid, cli := range clients {
+				if m.cid != cid {
+					cli <- m
+				}
 			}
 
-		case cli := <-entering:
-			clients[cli] = true
+		case ce := <-entering:
+			log.Println("enter " + ce.cid)
+			clients[ce.cid] = ce.ch
 
-		case cli := <-leaving:
-			delete(clients, cli)
-			close(cli)
+		case ce := <-leaving:
+			log.Println("leave " + ce.cid)
+			delete(clients, ce.cid)
+			close(ce.ch)
 		}
 	}
 }
@@ -48,28 +66,29 @@ func broadcaster() {
 
 //!+handleConn
 func handleConn(conn net.Conn) {
-	ch := make(chan string) // outgoing client messages
+	ch := make(chan cmsg) // outgoing client messages
 	go clientWriter(conn, ch)
 
 	who := conn.RemoteAddr().String()
-	ch <- "You are " + who
-	messages <- who + " has arrived"
-	entering <- ch
+	cid := clientID(who)
+	ch <- cmsg{cid, "You are " + who, 1}
+	messages <- cmsg{cid, who + " has arrived", 0}
+	entering <- clientEntry{clientID(who), ch}
 
 	input := bufio.NewScanner(conn)
 	for input.Scan() {
-		messages <- who + ": " + input.Text()
+		messages <- cmsg{cid, input.Text(), 2}
 	}
 	// NOTE: ignoring potential errors from input.Err()
 
-	leaving <- ch
-	messages <- who + " has left"
+	leaving <- clientEntry{clientID(who), ch}
+	messages <- cmsg{cid, who + " has left", 0}
 	conn.Close()
 }
 
-func clientWriter(conn net.Conn, ch <-chan string) {
+func clientWriter(conn net.Conn, ch <-chan cmsg) {
 	for msg := range ch {
-		fmt.Fprintln(conn, msg) // NOTE: ignoring network errors
+		fmt.Fprintln(conn, msg.msg) // NOTE: ignoring network errors
 	}
 }
 
